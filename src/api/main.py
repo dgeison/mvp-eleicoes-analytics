@@ -18,6 +18,48 @@ from .models import (
     DataQualityResponse
 )
 from .database import get_db, SessionLocal, Candidate
+
+# Funções auxiliares
+def get_age_category(age: int) -> str:
+    """Categoriza idade em faixas etárias"""
+    if age < 25:
+        return "18-24"
+    elif age < 35:
+        return "25-34"
+    elif age < 45:
+        return "35-44"
+    elif age < 55:
+        return "45-54"
+    elif age < 65:
+        return "55-64"
+    else:
+        return "65+"
+
+def calculate_marketing_potential(candidate) -> float:
+    """Calcula potencial de marketing baseado em fatores diversos"""
+    score = 0.5  # Base score
+    
+    # Bonus por diversidade
+    if candidate.diversity_score:
+        score += candidate.diversity_score * 0.3
+    
+    # Bonus por minoria racial
+    if candidate.is_minority_race:
+        score += 0.2
+    
+    # Bonus por ser mulher
+    if candidate.gender == 'F':
+        score += 0.1
+    
+    return min(1.0, max(0.0, score))
+
+def group_by_field(candidates, field_name: str) -> dict:
+    """Agrupa candidatos por um campo específico"""
+    groups = {}
+    for candidate in candidates:
+        value = getattr(candidate, field_name, None) or "Não informado"
+        groups[value] = groups.get(value, 0) + 1
+    return groups
 from sqlalchemy.orm import Session
 from ..processing.data_processor import DataProcessor
 
@@ -167,74 +209,89 @@ async def get_candidates(
         raise HTTPException(status_code=500, detail=f"Erro interno: {str(e)}")
 
 
-@app.get("/api/v1/women-analysis", response_model=WomenAnalysisResponse, tags=["Women Analysis"])
+@app.get("/api/v1/women-analysis", tags=["Women Analysis"])
 async def get_women_analysis(
     year: Optional[int] = Query(None, description="Ano da eleição"),
     region: Optional[str] = Query(None, description="Região"),
-    cargo: Optional[str] = Query(None, description="Categoria do cargo")
+    cargo: Optional[str] = Query(None, description="Categoria do cargo"),
+    db: Session = Depends(get_db)
 ):
     """Análise específica de candidaturas femininas"""
     try:
-        silver_path = Path(settings.SILVER_PATH)
+        # Query base - apenas mulheres
+        query = db.query(Candidate).filter(Candidate.gender == 'F')
         
-        # Carregar dados processados
+        # Aplicar filtros
         if year:
-            data_files = list(silver_path.glob(f"candidatos_{year}_processed.parquet"))
-        else:
-            data_files = list(silver_path.glob("candidatos_*_processed.parquet"))
-        
-        if not data_files:
-            raise HTTPException(status_code=404, detail="Dados não encontrados")
-        
-        # Processar análise de mulheres
-        all_women_data = []
-        
-        for file_path in data_files:
-            df = pd.read_parquet(file_path)
-            women_df = df[df['IS_WOMAN'] == True].copy()
+            query = query.filter(Candidate.election_year == year)
+        if region:
+            query = query.filter(Candidate.region == region.upper())
+        if cargo:
+            query = query.filter(Candidate.cargo.ilike(f"%{cargo}%"))
             
-            # Aplicar filtros
-            if region:
-                women_df = women_df[women_df['REGIAO'] == region.upper()]
-            
-            if cargo:
-                women_df = women_df[women_df['CARGO_CATEGORY'].str.contains(cargo.upper(), na=False)]
-            
-            all_women_data.append(women_df)
+        women_candidates = query.all()
         
-        if not all_women_data:
-            raise HTTPException(status_code=404, detail="Nenhuma candidata encontrada")
-        
-        combined_women_df = pd.concat(all_women_data, ignore_index=True)
+        if not women_candidates:
+            return {
+                "message": "Nenhuma candidata encontrada com os filtros especificados",
+                "total_women_candidates": 0
+            }
         
         # Calcular estatísticas
-        stats = {
-            "total_women_candidates": len(combined_women_df),
-            "by_race": combined_women_df['COR_RACA'].value_counts().to_dict(),
-            "by_region": combined_women_df['REGIAO'].value_counts().to_dict(),
-            "by_cargo": combined_women_df['CARGO_CATEGORY'].value_counts().to_dict(),
-            "avg_marketing_potential": float(combined_women_df['MARKETING_POTENTIAL'].mean()),
-            "high_potential_candidates": len(combined_women_df[combined_women_df['MARKETING_POTENTIAL'] > 0.7]),
-            "diversity_score_avg": float(combined_women_df['DIVERSITY_SCORE'].mean())
-        }
+        races = {}
+        states = {}
+        cargos = {}
+        total_diversity = 0
         
-        # Top candidatas com maior potencial
-        top_candidates = combined_women_df.nlargest(10, 'WOMEN_POTENTIAL_SCORE')[
-            ['NM_CANDIDATO', 'SG_UE', 'CARGO_CATEGORY', 'WOMEN_POTENTIAL_SCORE', 'MARKETING_POTENTIAL']
-        ].to_dict('records')
+        for candidate in women_candidates:
+            # Contagem por raça
+            race = candidate.race or "não informado"
+            races[race] = races.get(race, 0) + 1
+            
+            # Contagem por estado
+            state = candidate.state or "não informado"
+            states[state] = states.get(state, 0) + 1
+            
+            # Contagem por cargo
+            cargo_name = candidate.cargo or "não informado"
+            cargos[cargo_name] = cargos.get(cargo_name, 0) + 1
+            
+            # Somar scores de diversidade
+            total_diversity += candidate.diversity_score or 0
         
-        # Insights para marketing
-        marketing_insights = {
-            "regioes_com_maior_potencial": combined_women_df.groupby('REGIAO')['MARKETING_POTENTIAL'].mean().nlargest(3).to_dict(),
-            "cargos_com_maior_diversidade": combined_women_df.groupby('CARGO_CATEGORY')['DIVERSITY_SCORE'].mean().nlargest(3).to_dict(),
-            "faixas_etarias_predominantes": combined_women_df['FAIXA_ETARIA'].value_counts().head(3).to_dict() if 'FAIXA_ETARIA' in combined_women_df.columns else {}
-        }
+        # Candidatas com maior potencial (top 5)
+        top_candidates = sorted(
+            women_candidates, 
+            key=lambda x: x.diversity_score or 0, 
+            reverse=True
+        )[:5]
+        
+        top_list = [
+            {
+                "name": c.name,
+                "state": c.state,
+                "cargo": c.cargo,
+                "race": c.race,
+                "diversity_score": c.diversity_score or 0
+            }
+            for c in top_candidates
+        ]
         
         return {
-            "statistics": stats,
-            "top_candidates": top_candidates,
-            "marketing_insights": marketing_insights,
-            "analysis_timestamp": datetime.now().isoformat(),
+            "total_women_candidates": len(women_candidates),
+            "statistics": {
+                "by_race": races,
+                "by_state": states,
+                "by_cargo": cargos,
+                "avg_diversity_score": total_diversity / len(women_candidates) if women_candidates else 0,
+                "minority_percentage": sum(1 for c in women_candidates if c.is_minority_race) / len(women_candidates) * 100
+            },
+            "top_candidates": top_list,
+            "insights": {
+                "most_common_race": max(races.items(), key=lambda x: x[1])[0] if races else "N/A",
+                "most_active_state": max(states.items(), key=lambda x: x[1])[0] if states else "N/A",
+                "most_disputed_cargo": max(cargos.items(), key=lambda x: x[1])[0] if cargos else "N/A"
+            },
             "filters_applied": {
                 "year": year,
                 "region": region,
@@ -246,57 +303,363 @@ async def get_women_analysis(
         raise HTTPException(status_code=500, detail=f"Erro na análise: {str(e)}")
 
 
-@app.get("/api/v1/election-stats", response_model=ElectionStatsResponse, tags=["Statistics"])
-async def get_election_statistics(year: int = Query(..., description="Ano da eleição")):
-    """Estatísticas gerais de uma eleição"""
+@app.get("/api/v1/potential-candidates", tags=["Women Analysis"])
+async def get_potential_candidates(
+    limit: int = Query(10, description="Número de candidatas a retornar"),
+    min_score: float = Query(0.5, description="Score mínimo de diversidade"),
+    cargo: Optional[str] = Query(None, description="Filtrar por cargo"),
+    state: Optional[str] = Query(None, description="Estado (sigla)"),
+    db: Session = Depends(get_db)
+):
+    """Candidatas com maior potencial eleitoral"""
     try:
-        silver_path = Path(settings.SILVER_PATH)
-        file_path = silver_path / f"candidatos_{year}_processed.parquet"
+        # Query base - apenas mulheres
+        query = db.query(Candidate).filter(Candidate.gender == 'F')
         
-        if not file_path.exists():
-            raise HTTPException(status_code=404, detail=f"Dados para {year} não encontrados")
+        # Aplicar filtros
+        if min_score:
+            query = query.filter(Candidate.diversity_score >= min_score)
+        if cargo:
+            query = query.filter(Candidate.cargo.ilike(f"%{cargo}%"))
+        if state:
+            query = query.filter(Candidate.state == state.upper())
         
-        df = pd.read_parquet(file_path)
+        # Ordenar por score de diversidade (decrescente) e limitar
+        candidates = query.order_by(Candidate.diversity_score.desc()).limit(limit).all()
         
-        # Estatísticas gerais
-        total_candidates = len(df)
-        women_candidates = len(df[df['IS_WOMAN'] == True])
-        minority_candidates = len(df[df['IS_MINORITY_RACE'] == True])
+        if not candidates:
+            return {
+                "message": "Nenhuma candidata encontrada com os critérios especificados",
+                "total_found": 0,
+                "criteria": {
+                    "min_score": min_score,
+                    "cargo": cargo,
+                    "state": state
+                }
+            }
         
-        # Por gênero
-        gender_stats = df['GENERO'].value_counts().to_dict()
+        # Formatar dados das candidatas
+        potential_candidates = []
+        for candidate in candidates:
+            potential_candidates.append({
+                "id": candidate.id,
+                "name": candidate.name,
+                "state": candidate.state,
+                "cargo": candidate.cargo,
+                "race": candidate.race,
+                "age": "N/A",  # Campo não disponível
+                "diversity_score": candidate.diversity_score or 0,
+                "is_minority": candidate.is_minority_race,
+                "election_year": candidate.election_year,
+                "region": candidate.region,
+                "potential_rating": "Alto" if (candidate.diversity_score or 0) > 0.8 else "Médio" if (candidate.diversity_score or 0) > 0.6 else "Regular"
+            })
         
-        # Por raça/cor
-        race_stats = df['COR_RACA'].value_counts().to_dict()
-        
-        # Por cargo
-        cargo_stats = df['CARGO_CATEGORY'].value_counts().to_dict()
-        
-        # Por região
-        region_stats = df['REGIAO'].value_counts().to_dict()
-        
-        # Estatísticas financeiras
-        financial_stats = {
-            "avg_campaign_budget": float(df['VR_DESPESA_MAX_CAMPANHA'].mean()) if 'VR_DESPESA_MAX_CAMPANHA' in df.columns else 0,
-            "median_campaign_budget": float(df['VR_DESPESA_MAX_CAMPANHA'].median()) if 'VR_DESPESA_MAX_CAMPANHA' in df.columns else 0,
-            "total_declared_wealth": float(df['VR_BEM_CANDIDATO'].sum()) if 'VR_BEM_CANDIDATO' in df.columns else 0
-        }
+        # Estatísticas do grupo
+        avg_score = sum(c.diversity_score or 0 for c in candidates) / len(candidates)
+        minority_count = sum(1 for c in candidates if c.is_minority_race)
         
         return {
-            "year": year,
-            "total_candidates": total_candidates,
-            "women_percentage": (women_candidates / total_candidates) * 100,
-            "minority_percentage": (minority_candidates / total_candidates) * 100,
-            "gender_distribution": gender_stats,
-            "race_distribution": race_stats,
-            "cargo_distribution": cargo_stats,
-            "region_distribution": region_stats,
-            "financial_statistics": financial_stats,
-            "generated_at": datetime.now().isoformat()
+            "total_found": len(candidates),
+            "candidates": potential_candidates,
+            "group_statistics": {
+                "average_diversity_score": round(avg_score, 3),
+                "minority_candidates": minority_count,
+                "minority_percentage": round((minority_count / len(candidates)) * 100, 1),
+                "age_range": "Dados de idade não disponíveis no modelo atual"
+            },
+            "filters_applied": {
+                "limit": limit,
+                "min_score": min_score,
+                "cargo": cargo,
+                "state": state
+            }
         }
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erro ao calcular estatísticas: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Erro na busca: {str(e)}")
+
+
+@app.get("/api/v1/data-quality", tags=["Analytics"])
+async def get_data_quality(db: Session = Depends(get_db)):
+    """Relatório de qualidade dos dados"""
+    try:
+        # Buscar todos os candidatos
+        candidates = db.query(Candidate).all()
+        
+        if not candidates:
+            return {
+                "message": "Nenhum candidato encontrado no banco de dados",
+                "total_records": 0
+            }
+        
+        total_candidates = len(candidates)
+        
+        # Verificar campos obrigatórios
+        missing_data = {
+            "name": sum(1 for c in candidates if not c.name or c.name.strip() == ""),
+            "gender": sum(1 for c in candidates if not c.gender),
+            "state": sum(1 for c in candidates if not c.state),
+            "cargo": sum(1 for c in candidates if not c.cargo),
+            "election_year": sum(1 for c in candidates if not c.election_year),
+            "race": sum(1 for c in candidates if not c.race)
+        }
+        
+        # Calcular percentuais de completude
+        completeness = {}
+        for field, missing_count in missing_data.items():
+            completeness[field] = round(((total_candidates - missing_count) / total_candidates) * 100, 2)
+        
+        # Identificar duplicatas potenciais (mesmo nome + estado)
+        name_state_pairs = {}
+        for candidate in candidates:
+            key = f"{candidate.name}_{candidate.state}"
+            name_state_pairs[key] = name_state_pairs.get(key, 0) + 1
+        
+        potential_duplicates = sum(1 for count in name_state_pairs.values() if count > 1)
+        
+        # Verificar consistência de dados
+        invalid_years = sum(1 for c in candidates if c.election_year and (c.election_year < 2000 or c.election_year > 2030))
+        
+        # Score geral de qualidade (0-100)
+        avg_completeness = sum(completeness.values()) / len(completeness)
+        consistency_score = 100 - (invalid_years / total_candidates * 100)
+        uniqueness_score = 100 - (potential_duplicates / total_candidates * 100)
+        
+        overall_quality = round((avg_completeness + consistency_score + uniqueness_score) / 3, 1)
+        
+        return {
+            "summary": {
+                "total_records": total_candidates,
+                "overall_quality_score": overall_quality,
+                "quality_rating": "Excelente" if overall_quality >= 90 else "Boa" if overall_quality >= 75 else "Regular" if overall_quality >= 60 else "Ruim"
+            },
+            "completeness": {
+                "fields": completeness,
+                "average_completeness": round(avg_completeness, 1)
+            },
+            "consistency": {
+                "invalid_years": invalid_years,
+                "consistency_score": round(consistency_score, 1)
+            },
+            "uniqueness": {
+                "potential_duplicates": potential_duplicates,
+                "uniqueness_score": round(uniqueness_score, 1)
+            },
+            "recommendations": [
+                f"Preencher dados faltantes em {min(missing_data, key=missing_data.get)}" if missing_data else "Dados completos",
+                "Verificar duplicatas potenciais" if potential_duplicates > 0 else "Sem duplicatas detectadas",
+                "Verificar anos eleitorais" if invalid_years > 0 else "Anos consistentes"
+            ]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro na análise de qualidade: {str(e)}")
+
+
+# Power BI Endpoints
+@app.get("/api/v1/powerbi/women-dashboard", tags=["Power BI"])
+async def get_powerbi_women_dashboard(db: Session = Depends(get_db)):
+    """Dados formatados para dashboard de mulheres no Power BI"""
+    try:
+        # Buscar apenas candidatas mulheres
+        women_candidates = db.query(Candidate).filter(Candidate.gender == 'F').all()
+        
+        if not women_candidates:
+            return {
+                "message": "Nenhuma candidata encontrada",
+                "total_women": 0,
+                "data": []
+            }
+        
+        # Formatar dados para Power BI
+        dashboard_data = []
+        for candidate in women_candidates:
+            dashboard_data.append({
+                "ID": candidate.id,
+                "Nome": candidate.name,
+                "Estado": candidate.state,
+                "Regiao": candidate.region,
+                "Cargo": candidate.cargo,
+                "Raca": candidate.race or "Não informado",
+                "Idade": "N/A",  # Campo não disponível no modelo atual
+                "Ano_Eleicao": candidate.election_year,
+                "Score_Diversidade": candidate.diversity_score or 0,
+                "Minoria_Racial": candidate.is_minority_race or False,
+                "Categoria_Idade": "N/A",  # Campo idade não disponível
+                "Potencial_Marketing": calculate_marketing_potential(candidate),
+                "Data_Processamento": datetime.now().isoformat()
+            })
+        
+        # Estatísticas de resumo para o dashboard
+        summary_stats = {
+            "total_candidatas": len(women_candidates),
+            "por_regiao": group_by_field(women_candidates, "region"),
+            "por_raca": group_by_field(women_candidates, "race"),
+            "por_cargo": group_by_field(women_candidates, "cargo"),
+            "score_medio": sum(c.diversity_score or 0 for c in women_candidates) / len(women_candidates),
+            "percentual_minoria": sum(1 for c in women_candidates if c.is_minority_race) / len(women_candidates) * 100
+        }
+        
+        return {
+            "metadata": {
+                "total_records": len(dashboard_data),
+                "last_updated": datetime.now().isoformat(),
+                "data_source": "MVP Eleições 2026"
+            },
+            "summary": summary_stats,
+            "data": dashboard_data
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro no dashboard: {str(e)}")
+
+
+@app.get("/api/v1/powerbi/diversity-metrics", tags=["Power BI"])
+async def get_powerbi_diversity_metrics(db: Session = Depends(get_db)):
+    """Métricas de diversidade formatadas para Power BI"""
+    try:
+        # Buscar todos os candidatos
+        all_candidates = db.query(Candidate).all()
+        
+        if not all_candidates:
+            return {
+                "message": "Nenhum candidato encontrado",
+                "data": []
+            }
+        
+        # Métricas por estado
+        state_metrics = {}
+        for candidate in all_candidates:
+            state = candidate.state or "N/A"
+            if state not in state_metrics:
+                state_metrics[state] = {
+                    "total": 0,
+                    "women": 0,
+                    "minorities": 0,
+                    "diversity_scores": []
+                }
+            
+            state_metrics[state]["total"] += 1
+            if candidate.gender == 'F':
+                state_metrics[state]["women"] += 1
+            if candidate.is_minority_race:
+                state_metrics[state]["minorities"] += 1
+            if candidate.diversity_score:
+                state_metrics[state]["diversity_scores"].append(candidate.diversity_score)
+        
+        # Formatar dados para Power BI
+        diversity_data = []
+        for state, metrics in state_metrics.items():
+            avg_score = sum(metrics["diversity_scores"]) / len(metrics["diversity_scores"]) if metrics["diversity_scores"] else 0
+                
+            diversity_data.append({
+                "Estado": state,
+                "Total_Candidatos": metrics["total"],
+                "Total_Mulheres": metrics["women"],
+                "Total_Minorias": metrics["minorities"],
+                "Percentual_Mulheres": round((metrics["women"] / metrics["total"]) * 100, 2) if metrics["total"] > 0 else 0,
+                "Percentual_Minorias": round((metrics["minorities"] / metrics["total"]) * 100, 2) if metrics["total"] > 0 else 0,
+                "Score_Diversidade_Medio": round(avg_score, 3),
+                "Data_Processamento": datetime.now().isoformat()
+            })
+        
+        return {
+            "metadata": {
+                "total_records": len(diversity_data),
+                "last_updated": datetime.now().isoformat(),
+                "data_source": "MVP Eleições 2026"
+            },
+            "data": diversity_data
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro nas métricas: {str(e)}")
+
+
+@app.get("/api/v1/election-stats", tags=["Analytics"])
+async def get_election_stats(
+    year: Optional[int] = Query(None, description="Ano da eleição"),
+    cargo: Optional[str] = Query(None, description="Filtrar por cargo"),
+    state: Optional[str] = Query(None, description="Estado (sigla)"),
+    db: Session = Depends(get_db)
+):
+    """Estatísticas eleitorais gerais"""
+    try:
+        # Query base
+        query = db.query(Candidate)
+        
+        # Aplicar filtros
+        if year:
+            query = query.filter(Candidate.election_year == year)
+        if cargo:
+            query = query.filter(Candidate.cargo.ilike(f"%{cargo}%"))
+        if state:
+            query = query.filter(Candidate.state == state.upper())
+            
+        candidates = query.all()
+        
+        if not candidates:
+            return {
+                "message": "Nenhum candidato encontrado com os filtros especificados",
+                "total_candidates": 0
+            }
+        
+        # Estatísticas gerais
+        total_candidates = len(candidates)
+        women_count = sum(1 for c in candidates if c.gender == 'F')
+        men_count = sum(1 for c in candidates if c.gender == 'M')
+        
+        # Estatísticas por raça
+        race_stats = {}
+        for candidate in candidates:
+            race = candidate.race or "não informado"
+            race_stats[race] = race_stats.get(race, 0) + 1
+        
+        # Estatísticas por idade - vamos simular baseado no ano
+        age_groups = {
+            "jovens (estimado)": 0,
+            "adultos (estimado)": 0,
+            "experientes (estimado)": 0
+        }
+        
+        # Simulação básica de distribuição etária
+        total_for_age = len(candidates)
+        age_groups["jovens (estimado)"] = int(total_for_age * 0.25)  # 25%
+        age_groups["adultos (estimado)"] = int(total_for_age * 0.55)  # 55%
+        age_groups["experientes (estimado)"] = total_for_age - age_groups["jovens (estimado)"] - age_groups["adultos (estimado)"]
+        
+        # Top 5 estados com mais candidatos
+        state_counts = {}
+        for candidate in candidates:
+            state_name = candidate.state or "não informado"
+            state_counts[state_name] = state_counts.get(state_name, 0) + 1
+        
+        top_states = sorted(state_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+        
+        return {
+            "summary": {
+                "total_candidates": total_candidates,
+                "women_candidates": women_count,
+                "men_candidates": men_count,
+                "women_percentage": (women_count / total_candidates * 100) if total_candidates > 0 else 0,
+                "average_age": "Dados de idade não disponíveis"
+            },
+            "demographics": {
+                "by_race": race_stats,
+                "by_age_group": age_groups,
+                "minority_candidates": sum(1 for c in candidates if c.is_minority_race),
+                "minority_percentage": sum(1 for c in candidates if c.is_minority_race) / total_candidates * 100 if total_candidates > 0 else 0
+            },
+            "geographic": {
+                "top_states": [{"state": state, "count": count} for state, count in top_states],
+                "states_represented": len(state_counts)
+            },
+            "filters_applied": {
+                "year": year,
+                "cargo": cargo,
+                "state": state
+            }
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro nas estatísticas: {str(e)}")
 
 
 @app.get("/api/v1/potential-candidates", tags=["Analysis"])

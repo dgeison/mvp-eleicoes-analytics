@@ -17,6 +17,8 @@ aiohttp==3.9.1
 # Data visualization
 plotly==5.17.0
 streamlit==1.28.1
+matplotlib==3.8.0
+seaborn==0.13.0
 
 # Configuration
 python-dotenv==1.0.0
