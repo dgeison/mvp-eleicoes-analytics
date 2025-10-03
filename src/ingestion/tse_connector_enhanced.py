@@ -216,6 +216,216 @@ class TSEConnector:
             'PR': 'SUL', 'RS': 'SUL', 'SC': 'SUL'
         }
     
+    def _calculate_fair_diversity_score(self, df: pd.DataFrame) -> pd.Series:
+        """
+        Calcula score de diversidade baseado em critérios justos
+        
+        Critérios objetivos:
+        - Representação regional (25%)
+        - Experiência política (30%) 
+        - Formação acadêmica (20%)
+        - Histórico em diversidade (25%)
+        """
+        scores = pd.Series(0.0, index=df.index)
+        
+        try:
+            # 1. Representação Regional (25%)
+            if 'region' in df.columns:
+                # Regiões sub-representadas têm peso maior
+                region_weights = {
+                    'NORTE': 1.0,
+                    'NORDESTE': 0.9,
+                    'CENTRO-OESTE': 1.0,
+                    'SUDESTE': 0.7,
+                    'SUL': 0.8
+                }
+                regional_score = df['region'].map(region_weights).fillna(0.5)
+                scores += regional_score * 0.25
+            
+            # 2. Experiência Política (30%)
+            if 'cargo' in df.columns:
+                # Cargos executivos e legislativos têm peso maior
+                position_weights = {
+                    'PRESIDENTE': 1.0,
+                    'GOVERNADOR': 0.9,
+                    'SENADOR': 0.8,
+                    'DEPUTADO FEDERAL': 0.7,
+                    'DEPUTADO ESTADUAL': 0.6,
+                    'PREFEITO': 0.5,
+                    'VEREADOR': 0.4
+                }
+                experience_score = df['cargo'].map(position_weights).fillna(0.3)
+                scores += experience_score * 0.30
+            
+            # 3. Formação Acadêmica (20%)
+            if 'education' in df.columns:
+                education_weights = {
+                    'SUPERIOR COMPLETO': 1.0,
+                    'PÓS-GRADUAÇÃO': 1.0,
+                    'MESTRADO': 1.0,
+                    'DOUTORADO': 1.0,
+                    'SUPERIOR INCOMPLETO': 0.8,
+                    'ENSINO MÉDIO COMPLETO': 0.6,
+                    'ENSINO MÉDIO INCOMPLETO': 0.4,
+                    'ENSINO FUNDAMENTAL COMPLETO': 0.3,
+                    'ENSINO FUNDAMENTAL INCOMPLETO': 0.2
+                }
+                education_score = df['education'].map(education_weights).fillna(0.5)
+                scores += education_score * 0.20
+            
+            # 4. Diversidade e Inclusão (25%)
+            diversity_score = 0.0
+            
+            # Raça/Etnia (histórico de sub-representação)
+            if 'is_minority_race' in df.columns:
+                diversity_score += df['is_minority_race'].astype(float) * 0.15
+            
+            # Ocupação (áreas relacionadas a direitos e inclusão)
+            if 'occupation' in df.columns:
+                inclusion_occupations = [
+                    'ADVOGADO', 'PROFESSOR', 'ASSISTENTE SOCIAL', 
+                    'JORNALISTA', 'MÉDICO', 'PSICÓLOGO'
+                ]
+                occupation_diversity = df['occupation'].isin(inclusion_occupations).astype(float)
+                diversity_score += occupation_diversity * 0.10
+            
+            scores += diversity_score
+            
+            # Normalizar scores entre 0 e 1
+            if scores.max() > 0:
+                scores = scores / scores.max()
+            
+            return scores.round(2)
+            
+        except Exception as e:
+            logger.error(f"❌ Erro no cálculo de score: {e}")
+            return pd.Series(0.5, index=df.index)
+
+    def export_to_api_format(self, df: pd.DataFrame) -> List[Dict]:
+        """
+        Converte dados TSE para formato da nossa API
+        
+        Returns:
+            Lista de candidatas no formato esperado
+        """
+        try:
+            candidates = []
+            
+            for _, row in df.iterrows():
+                candidate = {
+                    "id": len(candidates) + 1,
+                    "name": row.get('name', 'Nome não informado'),
+                    "age": self._estimate_age(row),
+                    "education": self._normalize_education(row.get('education', '')),
+                    "political_experience": self._extract_experience(row),
+                    "region": row.get('region', 'NÃO INFORMADO'),
+                    "diversity_score": float(row.get('diversity_score', 0.5)),
+                    "social_media_engagement": self._estimate_engagement(row),
+                    "policy_areas": self._extract_policy_areas(row),
+                    "source": "TSE",
+                    "election_year": int(row.get('election_year', 2022)),
+                    "raw_data": {
+                        "ballot_name": row.get('ballot_name', ''),
+                        "race": row.get('race', ''),
+                        "occupation": row.get('occupation', ''),
+                        "state": row.get('state_code', ''),
+                        "city": row.get('city', '')
+                    }
+                }
+                
+                candidates.append(candidate)
+            
+            logger.info(f"📋 Convertidos {len(candidates)} candidatas para formato API")
+            return candidates
+            
+        except Exception as e:
+            logger.error(f"❌ Erro na exportação: {e}")
+            return []
+    
+    def _estimate_age(self, row: pd.Series) -> int:
+        """Estima idade baseada em dados disponíveis"""
+        # Implementação simplificada - pode ser melhorada com data de nascimento
+        current_year = datetime.now().year
+        election_year = row.get('election_year', 2022)
+        
+        # Estimativa baseada em experiência política
+        experience = row.get('cargo', '')
+        if 'DEPUTADO' in experience or 'SENADOR' in experience:
+            return 45  # Estimativa para legislativo
+        elif 'PREFEITO' in experience or 'GOVERNADOR' in experience:
+            return 50  # Estimativa para executivo
+        else:
+            return 40  # Estimativa padrão
+    
+    def _normalize_education(self, education: str) -> str:
+        """Normaliza nível de educação"""
+        education = str(education).upper()
+        
+        if any(term in education for term in ['SUPERIOR', 'GRADUAÇÃO', 'UNIVERSITÁRIO']):
+            return "Ensino Superior"
+        elif any(term in education for term in ['PÓS', 'MESTRADO', 'DOUTORADO', 'ESPECIALIZAÇÃO']):
+            return "Pós-graduação"
+        elif 'MÉDIO' in education:
+            return "Ensino Médio"
+        elif 'FUNDAMENTAL' in education:
+            return "Ensino Fundamental"
+        else:
+            return "Não informado"
+    
+    def _extract_experience(self, row: pd.Series) -> str:
+        """Extrai experiência política"""
+        cargo = row.get('cargo', '')
+        occupation = row.get('occupation', '')
+        
+        if cargo and cargo != 'nan':
+            return f"Candidata a {cargo}"
+        elif occupation and occupation != 'nan':
+            return f"Atuação como {occupation}"
+        else:
+            return "Experiência não informada"
+    
+    def _estimate_engagement(self, row: pd.Series) -> int:
+        """Estima engajamento em redes sociais"""
+        # Estimativa baseada em cargo e região
+        cargo = row.get('cargo', '')
+        region = row.get('region', '')
+        
+        base_score = 1000
+        
+        # Cargos de maior visibilidade
+        if any(term in cargo for term in ['PRESIDENTE', 'GOVERNADOR', 'SENADOR']):
+            base_score *= 5
+        elif 'DEPUTADO FEDERAL' in cargo:
+            base_score *= 3
+        elif 'DEPUTADO ESTADUAL' in cargo:
+            base_score *= 2
+        
+        # Regiões com mais acesso digital
+        if region in ['SUDESTE', 'SUL']:
+            base_score *= 1.5
+        
+        return min(base_score, 50000)  # Máximo 50k
+    
+    def _extract_policy_areas(self, row: pd.Series) -> List[str]:
+        """Extrai áreas de política baseadas na ocupação"""
+        occupation = str(row.get('occupation', '')).upper()
+        
+        policy_mapping = {
+            'PROFESSOR': ['Educação', 'Direitos Humanos'],
+            'MÉDICO': ['Saúde', 'Bem-estar Social'],
+            'ADVOGADO': ['Justiça', 'Direitos Humanos'],
+            'ASSISTENTE SOCIAL': ['Assistência Social', 'Direitos Humanos'],
+            'JORNALISTA': ['Comunicação', 'Transparência'],
+            'EMPRESÁRIO': ['Economia', 'Desenvolvimento'],
+            'AGRICULTOR': ['Meio Ambiente', 'Desenvolvimento Rural']
+        }
+        
+        for job, areas in policy_mapping.items():
+            if job in occupation:
+                return areas
+        
+        return ['Desenvolvimento Social', 'Direitos das Mulheres']
+
     def fetch_real_data(self, year: int = 2022, limit: Optional[int] = 1000) -> pd.DataFrame:
         """
         Busca dados reais do TSE para um ano específico
@@ -290,104 +500,48 @@ class TSEConnector:
         except Exception as e:
             logger.error(f"❌ Erro na busca de dados: {e}")
             return pd.DataFrame()
-                print(f"❌ Eleição de {year} não encontrada")
-                return False
-            
-            print(f"📥 Baixando dados de candidatos de {year}...")
-            
-            # Criar diretório se não existir
-            Path(save_path).mkdir(parents=True, exist_ok=True)
-            
-            # Download do arquivo
-            response = self.session.get(election['url_candidates'], stream=True)
-            response.raise_for_status()
-            
-            file_path = Path(save_path) / f"candidatos_{year}.zip"
-            
-            with open(file_path, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    f.write(chunk)
-            
-            print(f"✅ Dados salvos em: {file_path}")
-            return True
-            
-        except Exception as e:
-            print(f"❌ Erro ao baixar dados: {str(e)}")
-            return False
-    
-    def parse_candidates_csv(self, csv_path: str) -> pd.DataFrame:
-        """
-        Processa arquivo CSV de candidatos do TSE
-        
-        Args:
-            csv_path: Caminho para o arquivo CSV
-            
-        Returns:
-            DataFrame com dados processados
-        """
-        try:
-            # Ler CSV com encoding correto
-            df = pd.read_csv(csv_path, encoding='latin1', delimiter=';')
-            
-            # Mapeamento de colunas TSE para nosso schema
-            column_mapping = {
-                'NM_CANDIDATO': 'name',
-                'NM_URNA_CANDIDATO': 'ballot_name', 
-                'NR_CPF_CANDIDATO': 'cpf',
-                'DS_GENERO': 'gender',
-                'DS_COR_RACA': 'race',
-                'DS_GRAU_INSTRUCAO': 'education',
-                'DS_OCUPACAO': 'occupation',
-                'DS_CARGO': 'cargo',
-                'SG_UF': 'state',
-                'NM_MUNICIPIO': 'city',
-                'ANO_ELEICAO': 'election_year'
-            }
-            
-            # Selecionar e renomear colunas
-            available_cols = [col for col in column_mapping.keys() if col in df.columns]
-            df_filtered = df[available_cols].copy()
-            df_filtered = df_filtered.rename(columns=column_mapping)
-            
-            # Limpeza básica
-            df_filtered['gender'] = df_filtered['gender'].map({
-                'FEMININO': 'F',
-                'MASCULINO': 'M'
-            })
-            
-            # Filtrar apenas mulheres
-            df_women = df_filtered[df_filtered['gender'] == 'F'].copy()
-            
-            # Adicionar campos calculados
-            df_women['is_woman'] = True
-            df_women['is_minority_race'] = df_women['race'].isin(['PRETA', 'PARDA', 'INDÍGENA'])
-            
-            # Calcular score de diversidade básico
-            df_women['diversity_score'] = 0.5  # Placeholder
-            df_women.loc[df_women['is_minority_race'], 'diversity_score'] += 0.3
-            
-            print(f"✅ Processados {len(df_women)} candidatas mulheres")
-            return df_women
-            
-        except Exception as e:
-            print(f"❌ Erro ao processar CSV: {str(e)}")
-            return pd.DataFrame()
 
-def main():
-    """Função principal para testar o conector"""
+# Funções utilitárias para integração
+def test_tse_integration():
+    """Testa integração completa com TSE"""
+    print("🔍 Testando integração TSE...")
+    
     connector = TSEConnector()
     
-    print("🔗 TSE Connector - Teste")
-    print("=" * 30)
+    # Teste de conexão
+    if not connector.test_tse_connection():
+        print("❌ Falha na conexão")
+        return False
     
-    # Listar eleições disponíveis
-    elections = connector.get_available_elections()
-    print("📊 Eleições disponíveis:")
-    for election in elections:
-        print(f"  - {election['year']}: {election['type']}")
+    # Buscar amostra de dados
+    df = connector.fetch_real_data(year=2022, limit=100)
     
-    print("\n💡 Para baixar dados:")
-    print("connector.download_candidates_data(2022)")
+    if df.empty:
+        print("❌ Nenhum dado encontrado")
+        return False
+    
+    print(f"✅ Dados carregados: {len(df)} registros")
+    print(f"📊 Colunas: {list(df.columns)}")
+    
+    # Converter para formato API
+    candidates = connector.export_to_api_format(df)
+    
+    if candidates:
+        print(f"🎉 Integração TSE funcionando! {len(candidates)} candidatas processadas")
+        
+        # Mostrar exemplo
+        if candidates:
+            example = candidates[0]
+            print(f"\n📋 Exemplo de candidata:")
+            print(f"   Nome: {example['name']}")
+            print(f"   Região: {example['region']}")
+            print(f"   Score: {example['diversity_score']}")
+            print(f"   Experiência: {example['political_experience']}")
+        
+        return True
+    else:
+        print("❌ Falha na conversão de dados")
+        return False
 
 if __name__ == "__main__":
-    main()
+    test_tse_integration()

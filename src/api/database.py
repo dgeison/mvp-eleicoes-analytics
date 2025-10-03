@@ -1,7 +1,7 @@
 """
 Configuração do banco de dados
 """
-from sqlalchemy import create_engine, MetaData, Column, Integer, String, Float, Boolean, DateTime, Text
+from sqlalchemy import create_engine, MetaData, Column, Integer, String, Float, Boolean, DateTime, Text, JSON
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from contextlib import contextmanager
@@ -37,6 +37,10 @@ class Candidate(Base):
     race = Column(String(50), index=True)
     education = Column(String(100))
     occupation = Column(String(100))
+    age = Column(Integer)  # Campo adicionado para dados TSE
+    political_experience = Column(String(255))  # Campo adicionado para dados TSE
+    social_media_engagement = Column(Integer, default=0)  # Campo adicionado para dados TSE
+    policy_areas = Column(String(500))  # Campo adicionado para dados TSE
     cargo = Column(String(100), index=True)
     cargo_category = Column(String(50), index=True)
     state = Column(String(2), index=True)
@@ -60,6 +64,8 @@ class Candidate(Base):
     vote_percentage = Column(Float)
     
     # Metadados
+    source = Column(String(50), default='Manual', index=True)  # 'TSE', 'Manual', etc.
+    raw_data = Column(JSON)  # Dados brutos para auditoria
     created_at = Column(DateTime)
     updated_at = Column(DateTime)
 

@@ -130,7 +130,7 @@ services:
       - api
     networks:
       - eleicoes_network
-    command: streamlit run src/frontend/dashboard_premium.py --server.port=8501 --server.address=0.0.0.0
+    command: streamlit run src/frontend/dashboard_corrigido.py --server.port=8501 --server.address=0.0.0.0
 
   # Apache Airflow (simplified for MVP)
   airflow:

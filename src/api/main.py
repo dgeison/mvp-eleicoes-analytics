@@ -843,6 +843,238 @@ async def powerbi_diversity_metrics():
         raise HTTPException(status_code=500, detail=f"Erro nas métricas: {str(e)}")
 
 
+@app.post("/api/candidates/bulk_update", tags=["Candidates"])
+async def bulk_update_candidates(data: dict):
+    """
+    Atualização em massa de candidatas com dados do TSE
+    
+    Body:
+        {
+            "candidates": [...],
+            "source": "TSE",
+            "update_mode": "replace"
+        }
+    """
+    try:
+        candidates_data = data.get('candidates', [])
+        source = data.get('source', 'Unknown')
+        update_mode = data.get('update_mode', 'append')
+        
+        if not candidates_data:
+            raise HTTPException(status_code=400, detail="Nenhuma candidata fornecida")
+        
+        db = SessionLocal()
+        
+        try:
+            # Se modo replace, limpar dados existentes
+            if update_mode == 'replace':
+                db.query(Candidate).delete()
+                db.commit()
+            
+            # Inserir novas candidatas
+            updated_count = 0
+            
+            for candidate_data in candidates_data:
+                # Verificar se candidata já existe (por nome)
+                existing = db.query(Candidate).filter(
+                    Candidate.name == candidate_data.get('name')
+                ).first()
+                
+                if existing and update_mode != 'replace':
+                    # Atualizar candidata existente
+                    for key, value in candidate_data.items():
+                        if hasattr(existing, key):
+                            setattr(existing, key, value)
+                else:
+                    # Criar nova candidata
+                    new_candidate = Candidate(
+                        name=candidate_data.get('name', ''),
+                        age=candidate_data.get('age', 0),
+                        education=candidate_data.get('education', ''),
+                        political_experience=candidate_data.get('political_experience', ''),
+                        region=candidate_data.get('region', ''),
+                        diversity_score=candidate_data.get('diversity_score', 0.0),
+                        social_media_engagement=candidate_data.get('social_media_engagement', 0),
+                        policy_areas=",".join(candidate_data.get('policy_areas', [])),
+                        is_woman=True,  # Assumindo que só inserimos mulheres
+                        is_minority_race=candidate_data.get('raw_data', {}).get('race', '') in ['PRETA', 'PARDA', 'INDÍGENA']
+                    )
+                    db.add(new_candidate)
+                
+                updated_count += 1
+            
+            db.commit()
+            
+            return {
+                "status": "success",
+                "updated_count": updated_count,
+                "source": source,
+                "update_mode": update_mode,
+                "timestamp": datetime.now().isoformat()
+            }
+            
+        finally:
+            db.close()
+            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro na atualização: {str(e)}")
+
+
+# ========== ENDPOINTS OTIMIZADOS PARA PERFORMANCE ==========
+
+@app.get("/analytics/summary")
+async def get_summary_stats(db = Depends(get_db)):
+    """Endpoint otimizado para estatísticas resumidas"""
+    try:
+        from sqlalchemy import func, distinct
+        
+        # Consultas agregadas otimizadas
+        total_candidates = db.query(func.count(Candidate.id)).scalar()
+        
+        states_covered = db.query(func.count(distinct(Candidate.state))).scalar()
+        
+        avg_diversity_score = db.query(func.avg(Candidate.diversity_score)).scalar() or 0
+        
+        # Contagem por fonte
+        tse_count = db.query(func.count(Candidate.id)).filter(Candidate.source == 'TSE').scalar()
+        
+        # Taxa de diversidade
+        minority_count = db.query(func.count(Candidate.id)).filter(Candidate.is_minority_race == True).scalar()
+        diversity_rate = (minority_count / total_candidates * 100) if total_candidates > 0 else 0
+        
+        return {
+            "total_candidates": total_candidates,
+            "states_covered": states_covered,
+            "avg_diversity_score": round(avg_diversity_score, 3),
+            "diversity_rate": round(diversity_rate, 1),
+            "tse_candidates": tse_count,
+            "manual_candidates": total_candidates - tse_count,
+            "last_updated": datetime.now().isoformat()
+        }
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao buscar estatísticas: {str(e)}")
+
+
+@app.get("/analytics/regional")
+async def get_regional_stats(db = Depends(get_db)):
+    """Endpoint otimizado para dados regionais agregados"""
+    try:
+        from sqlalchemy import func
+        
+        # Query agregada por região
+        regional_data = db.query(
+            Candidate.region,
+            func.count(Candidate.id).label('total_candidates'),
+            func.avg(Candidate.diversity_score).label('avg_diversity_score'),
+            func.count(func.distinct(Candidate.state)).label('states_in_region')
+        ).group_by(Candidate.region).all()
+        
+        result = []
+        for row in regional_data:
+            result.append({
+                "region": row.region,
+                "total_candidates": row.total_candidates,
+                "avg_diversity_score": round(row.avg_diversity_score or 0, 3),
+                "states_in_region": row.states_in_region
+            })
+        
+        return result
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao buscar dados regionais: {str(e)}")
+
+
+@app.get("/candidates/paginated")
+async def get_candidates_paginated(
+    limit: int = Query(100, ge=1, le=2000),
+    skip: int = Query(0, ge=0),
+    region: Optional[str] = Query(None),
+    source: Optional[str] = Query(None),
+    min_score: Optional[float] = Query(None, ge=0, le=1),
+    cargo: Optional[str] = Query(None),
+    db = Depends(get_db)
+):
+    """Endpoint paginado otimizado com filtros"""
+    try:
+        # Base query
+        query = db.query(Candidate)
+        
+        # Aplicar filtros
+        if region and region != "Todas":
+            query = query.filter(Candidate.region == region)
+        
+        if source and source != "Todas":
+            query = query.filter(Candidate.source == source)
+        
+        if min_score is not None:
+            query = query.filter(Candidate.diversity_score >= min_score)
+        
+        if cargo and cargo != "Todos":
+            query = query.filter(Candidate.cargo == cargo)
+        
+        # Total count (otimizado)
+        total_count = query.count()
+        
+        # Fetch com limit/offset
+        candidates = query.offset(skip).limit(limit).all()
+        
+        # Converter para dicionário (otimizado)
+        candidates_data = []
+        for candidate in candidates:
+            candidates_data.append({
+                "id": candidate.id,
+                "name": candidate.name,
+                "ballot_name": candidate.ballot_name,
+                "state": candidate.state,
+                "region": candidate.region,
+                "cargo": candidate.cargo,
+                "education": candidate.education,
+                "diversity_score": candidate.diversity_score,
+                "source": candidate.source,
+                "is_minority_race": candidate.is_minority_race
+            })
+        
+        return {
+            "candidates": candidates_data,
+            "total_count": total_count,
+            "page_size": limit,
+            "current_skip": skip,
+            "has_next": (skip + limit) < total_count
+        }
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro na consulta paginada: {str(e)}")
+
+
+@app.get("/health")
+async def health_check(db = Depends(get_db)):
+    """Health check otimizado"""
+    try:
+        from sqlalchemy import func
+        
+        # Test database connection
+        db.execute("SELECT 1")
+        
+        # Basic stats
+        total_candidates = db.query(func.count(Candidate.id)).scalar()
+        
+        return {
+            "status": "healthy",
+            "database": "connected", 
+            "total_candidates": total_candidates,
+            "timestamp": datetime.now().isoformat(),
+            "version": "1.2.0-optimized"
+        }
+    
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
