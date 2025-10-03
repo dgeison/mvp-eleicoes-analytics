@@ -113,7 +113,7 @@ services:
       - eleicoes_network
     command: python -m jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root --NotebookApp.token='' --NotebookApp.password=''
 
-  # Streamlit Dashboard
+  # Streamlit Dashboard Original
   streamlit:
     build: .
     ports:
@@ -131,6 +131,25 @@ services:
     networks:
       - eleicoes_network
     command: streamlit run src/frontend/dashboard_corrigido.py --server.port=8501 --server.address=0.0.0.0
+
+  # Streamlit Dashboard com Filtros Excel-Style
+  streamlit-excel:
+    build: .
+    ports:
+      - "8502:8502"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres123@postgres:5432/eleicoes_analytics
+      - REDIS_URL=redis://redis:6379
+    volumes:
+      - ./src:/app/src
+      - ./data:/app/data
+    depends_on:
+      - postgres
+      - redis
+      - api
+    networks:
+      - eleicoes_network
+    command: streamlit run src/frontend/dashboard_debug.py --server.port=8502 --server.address=0.0.0.0
 
   # Apache Airflow (simplified for MVP)
   airflow:

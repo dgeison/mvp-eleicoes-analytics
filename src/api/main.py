@@ -1032,7 +1032,10 @@ async def get_candidates_paginated(
                 "education": candidate.education,
                 "diversity_score": candidate.diversity_score,
                 "source": candidate.source,
-                "is_minority_race": candidate.is_minority_race
+                "is_minority_race": candidate.is_minority_race,
+                "votes_received": candidate.votes_received,
+                "vote_percentage": candidate.vote_percentage,
+                "race": candidate.race
             })
         
         return {
