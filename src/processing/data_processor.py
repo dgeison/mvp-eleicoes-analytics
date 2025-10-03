@@ -217,22 +217,62 @@ class DataProcessor:
         return min((feminine_score + name_score) / 5, 1.0)
     
     def _calculate_diversity_score(self, df: pd.DataFrame) -> pd.Series:
-        """Calcula score de diversidade"""
+        """
+        Calcula score de diversidade de forma justa e transparente
+        
+        Critérios objetivos (sem viés racial):
+        - Representatividade regional (25%)
+        - Experiência política (30%) 
+        - Formação acadêmica (20%)
+        - Histórico de diversidade (25%)
+        """
         score = pd.Series(0.0, index=df.index)
         
-        # Pontos por ser mulher
-        if 'IS_WOMAN' in df.columns:
-            score += df['IS_WOMAN'].astype(int) * 0.4
+        # 1. Representatividade Regional (0-0.25)
+        if 'REGIAO' in df.columns:
+            underrepresented_regions = ['NORTE', 'NORDESTE', 'CENTRO-OESTE']
+            score += df['REGIAO'].isin(underrepresented_regions).astype(int) * 0.25
+            score += (~df['REGIAO'].isin(underrepresented_regions)).astype(int) * 0.15
         
-        # Pontos por raça/cor
-        if 'IS_MINORITY_RACE' in df.columns:
-            score += df['IS_MINORITY_RACE'].astype(int) * 0.3
+        # 2. Experiência Política por tipo de cargo (0-0.3)
+        if 'CARGO_CATEGORY' in df.columns:
+            experience_weights = {
+                'EXECUTIVO_MUNICIPAL': 0.3,  # Prefeito
+                'LEGISLATIVO_FEDERAL': 0.25,  # Senador/Dep Federal
+                'LEGISLATIVO_ESTADUAL': 0.2,  # Deputado Estadual
+                'EXECUTIVO_ESTADUAL': 0.3,   # Governador
+            }
+            
+            for cargo, weight in experience_weights.items():
+                score += (df['CARGO_CATEGORY'] == cargo).astype(int) * weight
         
-        # Pontos por idade (jovens)
-        if 'IDADE' in df.columns:
-            score += (df['IDADE'] <= 35).astype(int) * 0.3
+        # 3. Formação Acadêmica (0-0.2)
+        if 'GRAU_INSTRUCAO' in df.columns:
+            education_weights = {
+                'SUPERIOR COMPLETO': 0.2,
+                'SUPERIOR INCOMPLETO': 0.15,
+                'ENSINO MÉDIO COMPLETO': 0.1,
+                'ENSINO MÉDIO INCOMPLETO': 0.05
+            }
+            
+            for education, weight in education_weights.items():
+                score += (df['GRAU_INSTRUCAO'] == education).astype(int) * weight
         
-        return score
+        # 4. Histórico de Diversidade baseado na ocupação (0-0.25)
+        if 'OCUPACAO' in df.columns:
+            diversity_occupations = [
+                'PROFESSOR', 'EDUCADOR', 'ASSISTENTE SOCIAL', 
+                'ADVOGADO', 'JORNALISTA', 'PSICÓLOGO',
+                'SERVIDOR PÚBLICO', 'LÍDER COMUNITÁRIO'
+            ]
+            
+            # Verifica se a ocupação está relacionada com causas sociais
+            diversity_mask = df['OCUPACAO'].str.upper().str.contains('|'.join(diversity_occupations), na=False)
+            score += diversity_mask.astype(int) * 0.25
+            score += (~diversity_mask).astype(int) * 0.1  # Outras ocupações
+        
+        # Normalizar para escala 0-1
+        return score.clip(0, 1)
     
     def _calculate_age(self, birth_dates: pd.Series) -> pd.Series:
         """Calcula idade baseada na data de nascimento"""

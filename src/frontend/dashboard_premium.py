@@ -295,6 +295,13 @@ if df.empty:
 if page == "🏠 Dashboard Principal":
     st.header("🏠 Dashboard Principal")
     
+    # Aviso sobre sistema justo
+    st.success("""
+    🎉 **SISTEMA ATUALIZADO!** Agora utilizamos uma metodologia **justa e transparente** 
+    para calcular os scores de diversidade, focada em **competências e ações**, 
+    não em características pessoais. Veja os detalhes na seção ⚙️ Configurações.
+    """)
+    
     # Métricas principais
     col1, col2, col3, col4 = st.columns(4)
     
@@ -647,7 +654,63 @@ elif page == "📈 Qualidade dos Dados":
 elif page == "⚙️ Configurações":
     st.header("⚙️ Configurações e Informações")
     
-    st.subheader("🔧 Configurações da API")
+    st.subheader("� Metodologia de Score de Diversidade")
+    
+    st.info("""
+    **🎯 OBJETIVO:** Identificar candidatas com potencial para promover diversidade através de 
+    **AÇÕES e COMPETÊNCIAS**, não características pessoais.
+    """)
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("""
+        **📋 CRITÉRIOS DE AVALIAÇÃO:**
+        
+        **1️⃣ Representatividade Regional (25%)**
+        - Norte/Nordeste/Centro-Oeste: 25 pontos
+        - Sul/Sudeste: 15 pontos
+        - *Promove descentralização política*
+        
+        **2️⃣ Experiência Política (30%)**
+        - Prefeito/Governador: 30 pontos
+        - Senador/Dep. Federal: 25 pontos
+        - Deputado Estadual: 20 pontos
+        - *Capacidade de impacto em políticas*
+        """)
+    
+    with col2:
+        st.markdown("""
+        **3️⃣ Formação Acadêmica (20%)**
+        - Superior: 20 pontos
+        - Médio: 15 pontos
+        - Fundamental: 10 pontos
+        - *Preparação técnica para o cargo*
+        
+        **4️⃣ Histórico com Diversidade (25%)**
+        - Professor/Ativista/Assistente Social: 25 pontos
+        - Advogado/Jornalista/Psicólogo: 25 pontos
+        - Outras profissões: 10 pontos
+        - *Experiência com causas sociais*
+        """)
+    
+    st.success("""
+    ✅ **PRINCÍPIOS ÉTICOS:**
+    - Sem discriminação racial ou étnica
+    - Foco em competências objetivas
+    - Transparência total na metodologia
+    - Critérios auditáveis
+    - Igualdade de oportunidades
+    """)
+    
+    st.warning("""
+    ⚠️ **LIMITAÇÕES:**
+    - Scores são indicativos, não determinísticos
+    - Devem ser complementados com análise qualitativa
+    - Não substituem avaliação humana especializada
+    """)
+    
+    st.subheader("�🔧 Configurações da API")
     st.code(f"URL Base: {API_BASE_URL}")
     
     st.subheader("📊 Cache de Dados")
@@ -664,6 +727,8 @@ elif page == "⚙️ Configurações":
     st.subheader("🛠️ Informações Técnicas")
     st.json({
         "streamlit_version": st.__version__,
+        "methodology_version": "2.0 - Sistema Justo",
+        "last_update": "2025-10-03",
         "api_endpoints": [
             "/candidates",
             "/women-analysis", 
@@ -676,7 +741,8 @@ elif page == "⚙️ Configurações":
             "Gráficos interativos", 
             "Filtros dinâmicos",
             "Export CSV",
-            "Auto-refresh"
+            "Auto-refresh",
+            "Sistema de scoring justo e transparente"
         ]
     })
 
