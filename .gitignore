@@ -1,0 +1,131 @@
+# Logs
+logs/
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
+.env
+.ENV
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Data files (keep structure, ignore content)
+data/bronze/*
+data/silver/*
+data/gold/*
+!data/bronze/.gitkeep
+!data/silver/.gitkeep
+!data/gold/.gitkeep
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Docker
+.dockerignore
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Coverage reports
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+.cache
+.pytest_cache/
+cover/
+
+# Backup files
+backups/
+*.bak
+*.backup
+
+# Temporary files
+*.tmp
+*.temp
+.tmp/
+
+# Security
+*.pem
+*.key
+*.crt
+config/secrets.py
+
+# Local configuration
+.env.local
+.env.development
+.env.production
+
+# Documentation build
+docs/_build/
+site/
+
+# Node.js (if any frontend deps)
+node_modules/
+npm-debug.log*
+
+# Power BI
+*.pbix
+*.pbit
+
+# Spark
+metastore_db/
+derby.log
+spark-warehouse/
+
+# Airflow
+airflow/logs/
+airflow/plugins/
+
+# Large files
+*.zip
+*.tar.gz
+*.csv
+*.parquet
+*.json
+!.gitkeep
+!config.json
+!requirements.json
