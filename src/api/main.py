@@ -2,12 +2,13 @@
 API Principal - FastAPI
 Endpoints para acesso aos dados e análises
 """
-from fastapi import FastAPI, HTTPException, Depends, Query
+from fastapi import FastAPI, HTTPException, Depends, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from typing import List, Dict, Optional, Any
 from datetime import datetime
 import pandas as pd
+import io
 from pathlib import Path
 
 from ..config import settings
@@ -1076,6 +1077,340 @@ async def health_check(db = Depends(get_db)):
             "error": str(e),
             "timestamp": datetime.now().isoformat()
         }
+
+
+# =====================================================
+# ENDPOINTS POWERBI ESPECÍFICOS - EXPORTAÇÃO DE DADOS
+# =====================================================
+
+@app.get("/powerbi/candidates/csv", tags=["PowerBI Export"])
+async def export_candidates_csv_powerbi(
+    db=Depends(get_db),
+    limit: Optional[int] = Query(None, description="Limite de registros"),
+    states: Optional[str] = Query(None, description="Estados separados por vírgula (ex: SP,RJ,MG)"),
+    regions: Optional[str] = Query(None, description="Regiões separadas por vírgula"),
+    cargos: Optional[str] = Query(None, description="Cargos separados por vírgula")
+):
+    """
+    🔄 Export CSV otimizado para PowerBI
+    
+    Baixe todos os dados em formato CSV para importar no PowerBI:
+    - Filtros opcionais por estado, região e cargo
+    - Dados formatados para análise
+    - Headers em português para melhor legibilidade
+    """
+    try:
+        query = db.query(Candidate)
+        
+        # Aplicar filtros se fornecidos
+        if states:
+            state_list = [s.strip().upper() for s in states.split(',')]
+            query = query.filter(Candidate.state.in_(state_list))
+            
+        if regions:
+            region_list = [r.strip().upper() for r in regions.split(',')]
+            query = query.filter(Candidate.region.in_(region_list))
+            
+        if cargos:
+            cargo_list = [c.strip() for c in cargos.split(',')]
+            query = query.filter(Candidate.cargo.in_(cargo_list))
+        
+        if limit:
+            query = query.limit(limit)
+            
+        candidates = query.all()
+        
+        # Converter para DataFrame com nomes em português
+        data = []
+        for candidate in candidates:
+            data.append({
+                'ID': candidate.id,
+                'Nome_Completo': candidate.name,
+                'Nome_Urna': candidate.ballot_name,
+                'Estado': candidate.state,
+                'Regiao': candidate.region,
+                'Cargo': candidate.cargo,
+                'Educacao': candidate.education,
+                'Raca_Cor': candidate.race,
+                'Score_Diversidade': candidate.diversity_score,
+                'Votos_Recebidos': candidate.votes_received or 0,
+                'Percentual_Votos': candidate.vote_percentage or 0,
+                'Eh_Minoria_Racial': candidate.is_minority_race,
+                'Fonte_Dados': candidate.source,
+                'Data_Export': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            })
+        
+        df = pd.DataFrame(data)
+        
+        # Criar CSV em memória
+        output = io.StringIO()
+        df.to_csv(output, index=False, encoding='utf-8', sep=';')
+        csv_content = output.getvalue()
+        
+        filename = f"candidatas_eleicoes_2026_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        
+        return Response(
+            content=csv_content,
+            media_type="text/csv; charset=utf-8",
+            headers={
+                "Content-Disposition": f"attachment; filename={filename}",
+                "Content-Type": "text/csv; charset=utf-8"
+            }
+        )
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao gerar CSV: {str(e)}")
+
+
+@app.get("/powerbi/candidates/excel", tags=["PowerBI Export"])
+async def export_candidates_excel_powerbi(
+    db=Depends(get_db),
+    limit: Optional[int] = Query(None, description="Limite de registros"),
+    states: Optional[str] = Query(None, description="Estados separados por vírgula"),
+    regions: Optional[str] = Query(None, description="Regiões separadas por vírgula"),
+    cargos: Optional[str] = Query(None, description="Cargos separados por vírgula")
+):
+    """
+    📊 Export Excel formatado para PowerBI
+    
+    Baixe arquivo Excel com formatação otimizada:
+    - Múltiplas abas (dados, resumos, metadados)
+    - Formatação de números e percentuais
+    - Tabelas dinâmicas prontas
+    """
+    try:
+        query = db.query(Candidate)
+        
+        # Aplicar filtros
+        if states:
+            state_list = [s.strip().upper() for s in states.split(',')]
+            query = query.filter(Candidate.state.in_(state_list))
+            
+        if regions:
+            region_list = [r.strip().upper() for r in regions.split(',')]
+            query = query.filter(Candidate.region.in_(region_list))
+            
+        if cargos:
+            cargo_list = [c.strip() for c in cargos.split(',')]
+            query = query.filter(Candidate.cargo.in_(cargo_list))
+        
+        if limit:
+            query = query.limit(limit)
+            
+        candidates = query.all()
+        
+        # Converter para DataFrame
+        data = []
+        for candidate in candidates:
+            data.append({
+                'ID': candidate.id,
+                'Nome Completo': candidate.name,
+                'Nome na Urna': candidate.ballot_name,
+                'Estado': candidate.state,
+                'Região': candidate.region,
+                'Cargo': candidate.cargo,
+                'Educação': candidate.education,
+                'Raça/Cor': candidate.race,
+                'Score Diversidade': candidate.diversity_score,
+                'Votos Recebidos': candidate.votes_received or 0,
+                'Percentual Votos': candidate.vote_percentage or 0,
+                'É Minoria Racial': 'Sim' if candidate.is_minority_race else 'Não',
+                'Fonte dos Dados': candidate.source
+            })
+        
+        df = pd.DataFrame(data)
+        
+        # Criar resumos
+        resumo_estados = df.groupby('Estado').agg({
+            'ID': 'count',
+            'Votos Recebidos': ['sum', 'mean'],
+            'É Minoria Racial': lambda x: (x == 'Sim').sum()
+        }).round(2)
+        
+        resumo_cargos = df.groupby('Cargo').agg({
+            'ID': 'count',
+            'Votos Recebidos': ['sum', 'mean'],
+            'Score Diversidade': 'mean'
+        }).round(2)
+        
+        # Criar Excel em memória
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            # Aba principal
+            df.to_excel(writer, sheet_name='Candidatas', index=False)
+            
+            # Abas de resumo
+            resumo_estados.to_excel(writer, sheet_name='Resumo por Estado')
+            resumo_cargos.to_excel(writer, sheet_name='Resumo por Cargo')
+            
+            # Aba de metadados
+            metadata_df = pd.DataFrame([
+                ['Data de Exportação', datetime.now().strftime('%Y-%m-%d %H:%M:%S')],
+                ['Total de Candidatas', len(df)],
+                ['Filtros Aplicados', f"Estados: {states or 'Todos'}, Regiões: {regions or 'Todas'}, Cargos: {cargos or 'Todos'}"],
+                ['Fonte', 'TSE - Tribunal Superior Eleitoral'],
+                ['Processamento', 'MVP Eleições Analytics']
+            ], columns=['Campo', 'Valor'])
+            metadata_df.to_excel(writer, sheet_name='Metadados', index=False)
+            
+            # Aplicar formatação
+            workbook = writer.book
+            
+            # Formatos
+            num_format = workbook.add_format({'num_format': '#,##0'})
+            pct_format = workbook.add_format({'num_format': '0.00%'})
+            header_format = workbook.add_format({
+                'bold': True,
+                'text_wrap': True,
+                'valign': 'top',
+                'fg_color': '#D7E4BC',
+                'border': 1
+            })
+            
+            # Formatação da aba principal
+            worksheet = writer.sheets['Candidatas']
+            worksheet.set_column('J:J', 15, num_format)  # Votos
+            worksheet.set_column('K:K', 15, pct_format)  # Percentual
+            
+            # Header
+            for col_num, value in enumerate(df.columns.values):
+                worksheet.write(0, col_num, value, header_format)
+        
+        excel_content = output.getvalue()
+        
+        filename = f"candidatas_eleicoes_2026_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        
+        return Response(
+            content=excel_content,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao gerar Excel: {str(e)}")
+
+
+@app.get("/powerbi/database-info", tags=["PowerBI Export"])
+async def get_powerbi_database_info():
+    """
+    🔗 Informações para Conexão Direta PowerBI → PostgreSQL
+    
+    Use estas informações para conectar o PowerBI diretamente ao banco:
+    - Melhor performance
+    - Refresh automático
+    - Queries personalizadas
+    """
+    return {
+        "tipo_conexao": "PostgreSQL",
+        "configuracao": {
+            "servidor": "localhost",
+            "porta": 5432,
+            "banco_dados": "eleicoes_analytics", 
+            "tabela_principal": "candidates",
+            "usuario": "postgres",
+            "observacao": "Configure as credenciais no PowerBI"
+        },
+        "string_conexao_exemplo": "Host=localhost;Port=5432;Database=eleicoes_analytics;Username=postgres;Password=sua_senha",
+        "query_recomendada": """
+SELECT 
+    id as "ID",
+    name as "Nome Completo",
+    ballot_name as "Nome na Urna",
+    state as "Estado", 
+    region as "Região",
+    cargo as "Cargo",
+    education as "Educação",
+    race as "Raça/Cor",
+    diversity_score as "Score Diversidade",
+    votes_received as "Votos Recebidos",
+    vote_percentage as "Percentual Votos",
+    is_minority_race as "É Minoria Racial",
+    source as "Fonte"
+FROM candidates 
+WHERE state IS NOT NULL
+ORDER BY votes_received DESC NULLS LAST;
+        """,
+        "dicas_powerbi": [
+            "Use 'Importar' para datasets pequenos (<1M registros)",
+            "Use 'DirectQuery' para datasets grandes ou atualizações em tempo real",
+            "Configure refresh automático no PowerBI Service",
+            "Crie medidas DAX para cálculos personalizados",
+            "Use filtros no SQL para melhor performance"
+        ],
+        "medidas_dax_sugeridas": {
+            "Total Candidatas": "COUNTROWS(candidatas)",
+            "Total Votos": "SUM(candidatas[Votos Recebidos])",
+            "Média Votos": "AVERAGE(candidatas[Votos Recebidos])",
+            "% Minorias": "DIVIDE(COUNTROWS(FILTER(candidatas, candidatas[É Minoria Racial] = TRUE)), COUNTROWS(candidatas), 0)",
+            "Score Diversidade Médio": "AVERAGE(candidatas[Score Diversidade])"
+        }
+    }
+
+
+@app.get("/powerbi/quick-data", tags=["PowerBI Export"])
+async def get_powerbi_quick_data(
+    db=Depends(get_db),
+    limit: int = Query(1000, description="Limite de registros para teste"),
+    include_summary: bool = Query(True, description="Incluir resumo estatístico")
+):
+    """
+    ⚡ Dados Rápidos para Teste no PowerBI
+    
+    Endpoint otimizado para testes rápidos:
+    - Dados limitados para performance
+    - Formato JSON otimizado
+    - Resumos estatísticos incluídos
+    """
+    try:
+        # Buscar dados
+        candidates = db.query(Candidate).limit(limit).all()
+        
+        # Dados principais
+        candidates_data = [
+            {
+                "ID": c.id,
+                "Nome": c.name,
+                "Estado": c.state,
+                "Região": c.region,
+                "Cargo": c.cargo,
+                "Educação": c.education,
+                "Raça": c.race,
+                "Diversidade": float(c.diversity_score) if c.diversity_score else 0,
+                "Votos": int(c.votes_received) if c.votes_received else 0,
+                "Percentual": float(c.vote_percentage) if c.vote_percentage else 0,
+                "Minoria": bool(c.is_minority_race)
+            }
+            for c in candidates
+        ]
+        
+        response_data = {
+            "dados": candidates_data,
+            "metadados": {
+                "total_registros": len(candidates_data),
+                "data_exportacao": datetime.now().isoformat(),
+                "versao_api": "1.0.0"
+            }
+        }
+        
+        # Resumo estatístico opcional
+        if include_summary and candidates_data:
+            df = pd.DataFrame(candidates_data)
+            
+            response_data["resumo"] = {
+                "total_candidatas": len(df),
+                "total_votos": int(df['Votos'].sum()),
+                "media_votos": float(df['Votos'].mean()),
+                "diversidade_media": float(df['Diversidade'].mean()),
+                "percentual_minorias": float((df['Minoria'].sum() / len(df)) * 100),
+                "distribuicao_por_estado": df['Estado'].value_counts().to_dict(),
+                "distribuicao_por_cargo": df['Cargo'].value_counts().to_dict(),
+                "distribuicao_por_regiao": df['Região'].value_counts().to_dict()
+            }
+        
+        return response_data
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao gerar dados rápidos: {str(e)}")
 
 
 if __name__ == "__main__":
